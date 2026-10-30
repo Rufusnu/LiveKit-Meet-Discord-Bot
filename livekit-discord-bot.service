@@ -1,0 +1,21 @@
+[Unit]
+Description=LiveKit room -> Discord link bot
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/opt/livekit-bot/.env
+ExecStart=/usr/bin/python3 -I /opt/livekit-bot/bot.py
+Restart=on-failure
+RestartSec=5
+DynamicUser=no
+User=livekitbot
+Group=livekitbot
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/livekit-bot
+
+[Install]
+WantedBy=multi-user.target

@@ -3,12 +3,16 @@ import base64, hashlib, hmac, json, os, subprocess, sys, tempfile, threading, ti
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 calls = []
+reject_embeds = False
 
 
 class FakeDiscord(BaseHTTPRequestHandler):
     def _h(self):
         n = int(self.headers.get("Content-Length", 0)); b = self.rfile.read(n)
         calls.append((self.command, self.path, json.loads(b) if b else None, self.headers.get("Authorization")))
+        if reject_embeds and self.command == "POST" and "embeds" in calls[-1][2]:
+            out = b'{"message": "Invalid Form Body"}'
+            self.send_response(400); self.end_headers(); self.wfile.write(out); return
         out = json.dumps({"id": "m%d" % len(calls)}).encode() if self.command == "POST" else b""
         self.send_response(200 if out else 204); self.end_headers(); self.wfile.write(out)
     do_POST = do_DELETE = _h
@@ -54,7 +58,15 @@ res = {}
 res["OBS video track -> 200"] = send("track_published", "obs-Rufusnu", "Rufusnu (OBS)", VIDEO_CAMERA) == 200
 c = calls[0]
 res["posted to channel 123 with bot auth"] = len(calls) == 1 and c[0] == "POST" and c[1] == "/channels/123/messages" and c[3] == "Bot faketoken"
-res["message names sharer without '(OBS)' suffix, says OBS, has link"] = "**Rufusnu**" in c[2]["content"] and "(OBS)" in c[2]["content"] and "https://meet.example.com/rooms/main" in c[2]["content"]
+e = c[2]["embeds"][0]
+LINK = "https://meet.example.com/rooms/main"
+src = {f["name"].split(" ", 1)[1]: f["value"] for f in e["fields"]}
+res["card title names the sharer without the (OBS) suffix"] = e["title"].endswith("Rufusnu is live") and "(OBS)" not in e["title"]
+res["card says the source is OBS, shows room and a live timestamp"] = "OBS" in src["Source"] and src["Room"] == "`main`" and src["Started"].startswith("<t:") and src["Started"].endswith(":R>")
+res["card is a link to the room, has footer and timestamp"] = e["url"] == LINK and "ZeroTier" in e["footer"]["text"] and e["timestamp"].endswith("Z")
+btn = c[2]["components"][0]["components"][0]
+res["Watch link button points to the room"] = btn["type"] == 2 and btn["style"] == 5 and btn["label"] == "Watch" and btn["url"] == LINK
+res["OBS and browser cards use different colours"] = True  # checked below
 res["mentions disabled"] = c[2]["allowed_mentions"] == {"parse": []}
 send("track_published", "obs-Rufusnu", "Rufusnu (OBS)", AUDIO)
 res["OBS audio track ignored"] = len(calls) == 1
@@ -65,9 +77,11 @@ res["browser camera ignored"] = len(calls) == 1
 send("track_published", "Marius__ab12", "Marius", SCREEN_AUDIO)
 res["browser screen-share audio ignored"] = len(calls) == 1
 send("track_published", "Marius__ab12", "Marius", VIDEO_SCREEN)
-res["browser screen share posts, no OBS tag"] = len(calls) == 2 and "**Marius**" in calls[1][2]["content"] and "(OBS)" not in calls[1][2]["content"]
+e2 = calls[1][2]["embeds"][0]
+res["browser screen share posts a card with a Browser source"] = len(calls) == 2 and e2["title"].endswith("Marius is live") and "Browser" in e2["fields"][0]["value"]
+res["OBS and browser cards use different colours"] = e["color"] != e2["color"]
 send("track_published", "Ana__zz99", "Ana", {"type": 1, "source": 3})
-res["numeric enums (type 1, source 3) work"] = len(calls) == 3 and "**Ana**" in calls[2][2]["content"]
+res["numeric enums (type 1, source 3) work"] = len(calls) == 3 and calls[2][2]["embeds"][0]["title"].endswith("Ana is live")
 res["wrong secret -> 401"] = send("participant_left", "obs-Rufusnu", sec="wrong") == 401
 res["wrong key -> 401"] = send("participant_left", "obs-Rufusnu", key="OTHER") == 401
 res["expired -> 401"] = send("participant_left", "obs-Rufusnu", exp=-10) == 401
@@ -85,6 +99,10 @@ res["room finished deletes the remaining message (Ana's, m3)"] = calls[-1][:2] =
 res["state empty at the end"] = json.load(open(d + "/state.json")) == {}
 send("room_started", room="main")
 res["room_started alone posts nothing"] = len(calls) == 6
+reject_embeds = True
+n = len(calls)
+send("track_published", "Zed__0001", "Zed", VIDEO_SCREEN)
+res["if Discord rejects the card (400) the plain message is sent instead"] = len(calls) == n + 2 and "embeds" in calls[n][2] and "content" in calls[n + 1][2] and "**Zed**" in calls[n + 1][2]["content"]
 p.terminate()
 for k, v in res.items(): print("PASS" if v else "FAIL", k)
 sys.exit(0 if all(res.values()) else 1)

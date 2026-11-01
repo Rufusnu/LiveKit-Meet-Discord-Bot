@@ -93,6 +93,44 @@ def delete_message(mid):
         raise
 
 
+BANNER_URL = ENV.get("BANNER_URL", "")  # optional public image shown at the bottom of the card
+
+
+def card(room, display, via_obs, link):
+    """The fancy message: a coloured embed with fields, a live timestamp and a link button."""
+    now = int(time.time())
+    embed = {
+        "title": f"\U0001F534 {display} is live",
+        "url": link,
+        "description": "Sharing their screen. Hit **Watch** to jump in!",
+        "color": 0xEB459E if via_obs else 0x5865F2,
+        "fields": [
+            {"name": "\U0001F4FA Source", "value": "\U0001F3AE OBS" if via_obs else "\U0001F310 Browser", "inline": True},
+            {"name": "\U0001F552 Started", "value": f"<t:{now}:R>", "inline": True},
+            {"name": "\U0001F6AA Room", "value": f"`{room}`", "inline": True},
+        ],
+        "footer": {"text": "Needs ZeroTier \u00b7 this message disappears when the stream ends"},
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(now)),
+    }
+    if BANNER_URL:
+        embed["image"] = {"url": BANNER_URL}
+    return {
+        "embeds": [embed],
+        "components": [{"type": 1, "components": [
+            {"type": 2, "style": 5, "label": "Watch", "emoji": {"name": "\U0001F4FA"}, "url": link},
+        ]}],
+        "allowed_mentions": {"parse": []},
+    }
+
+
+def plain(display, via_obs, link):
+    how = " (OBS)" if via_obs else ""
+    return {
+        "content": f"\U0001F3A5 **{display}** is sharing their screen{how}: {link}\n(needs ZeroTier; this message disappears when they stop)",
+        "allowed_mentions": {"parse": []},
+    }
+
+
 def share_started(room, identity, display, via_obs):
     with LOCK:
         state = load()
@@ -100,11 +138,13 @@ def share_started(room, identity, display, via_obs):
         if k in state:
             return
         link = f"{MEET_URL}/rooms/{urllib.parse.quote(room, safe='')}"
-        how = " (OBS)" if via_obs else ""
-        msg = discord("POST", f"/channels/{CHANNEL}/messages", {
-            "content": f"\U0001F3A5 **{display}** is sharing their screen{how}: {link}\n(needs ZeroTier; this message disappears when they stop)",
-            "allowed_mentions": {"parse": []},
-        })
+        try:
+            msg = discord("POST", f"/channels/{CHANNEL}/messages", card(room, display, via_obs, link))
+        except urllib.error.HTTPError as e:
+            if e.code != 400:
+                raise
+            log(f"fancy card rejected ({e.read()[:150]!r}), sending the plain message instead")
+            msg = discord("POST", f"/channels/{CHANNEL}/messages", plain(display, via_obs, link))
         state[k] = msg["id"]
         save(state)
         log(f"posted message {msg['id']} for {identity} in {room}")

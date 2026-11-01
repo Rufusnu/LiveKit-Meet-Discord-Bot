@@ -2,7 +2,7 @@
 
 A tiny bot that announces screen shares on a [LiveKit](https://livekit.io) server in a Discord channel.
 
-- When somebody **starts sharing their screen** (with OBS over WHIP, or with the browser's share button), it posts a message with the name of the sharer and a link to the room.
+- When somebody **starts sharing their screen** (with OBS over WHIP, or with the browser's share button), it posts a card with the name of the sharer, the source (OBS or browser), when they started, and a **Watch** button that opens the room.
 - When they **stop** (or leave, or the room finishes), it deletes that message.
 
 One message per sharer, so several people can share at the same time.
@@ -15,6 +15,18 @@ with any LiveKit server that can send webhooks, including LiveKit Cloud.
 LiveKit server --(webhooks: track_published / track_unpublished / participant_left / room_finished)--> bot.py --(Discord REST API)--> #channel
 ```
 
+## What the message looks like
+
+A Discord embed (not plain text):
+
+- title `🔴 <name> is live`, linking to the room, with a coloured bar (pink for OBS, blurple for browser shares)
+- fields: 📺 Source (OBS / Browser), 🕒 Started (a live "x minutes ago" timestamp), 🚪 Room
+- a footer ("Needs ZeroTier, this message disappears when the stream ends") and a message timestamp
+- a link button **📺 Watch** under the card (link buttons need no interaction handling, so the bot never connects to the Discord gateway)
+- optional banner image: set `BANNER_URL` in `.env` to a **public** image URL (Discord fetches it itself, so it cannot be a private address)
+
+If Discord ever rejects the card (HTTP 400) the bot logs it and sends the plain text message instead, so announcements keep working.
+
 ## How it works
 
 1. LiveKit sends a signed webhook for every event to the bot.
@@ -25,7 +37,7 @@ LiveKit server --(webhooks: track_published / track_unpublished / participant_le
    (the browser's share button). Audio and camera tracks never trigger a message.
 4. On `track_published` of a share the bot posts `<name> is sharing their screen: <MEET_URL>/rooms/<room>` and saves
    `room + participant identity -> message id` in `state.json`. A second start for the same participant is ignored.
-   A trailing ` (OBS)` in the participant name is shown as "(OBS)" in the sentence.
+   A trailing ` (OBS)` in the participant name is removed from the title and shown as the source instead.
 5. On `track_unpublished` of that share, `participant_left` of that participant, or `room_finished`, it deletes the
    message. If the message was already deleted by someone, that is fine. If Discord fails, the bot answers `500` so
    LiveKit retries.

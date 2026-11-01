@@ -1,29 +1,36 @@
 # LiveKit Meet Discord Bot
 
-A tiny bot that announces [LiveKit](https://livekit.io) rooms in a Discord channel.
+A tiny bot that announces screen shares on a [LiveKit](https://livekit.io) server in a Discord channel.
 
-- When a room **starts**, it posts a message with a link to the room.
-- When the room **finishes**, it deletes that message.
+- When somebody **starts sharing their screen** (with OBS over WHIP, or with the browser's share button), it posts a message with the name of the sharer and a link to the room.
+- When they **stop** (or leave, or the room finishes), it deletes that message.
+
+One message per sharer, so several people can share at the same time.
 
 It is one Python file using only the standard library (no pip packages), written for a self-hosted
 LiveKit server with the [LiveKit Meet](https://github.com/livekit-examples/meet) front end. It works
 with any LiveKit server that can send webhooks, including LiveKit Cloud.
 
 ```
-LiveKit server --(webhook: room_started / room_finished)--> bot.py --(Discord REST API)--> #channel
+LiveKit server --(webhooks: track_published / track_unpublished / participant_left / room_finished)--> bot.py --(Discord REST API)--> #channel
 ```
 
 ## How it works
 
-1. LiveKit sends a signed webhook (`room_started`, `room_finished`) to the bot.
+1. LiveKit sends a signed webhook for every event to the bot.
 2. The bot checks the JWT in the `Authorization` header (HS256 with your API secret, issuer = your API
    key, not expired, and the `sha256` claim matches the request body). Anything else gets `401`.
-3. On `room_started` it posts `Room <name> is open: <MEET_URL>/rooms/<name>` and saves
-   `room name -> message id` in `state.json`. A second start for the same room is ignored.
-4. On `room_finished` it deletes that message and forgets the room. If the message was already deleted
-   by someone, that is fine. If Discord fails, the bot answers `500` so LiveKit retries.
+3. A **share** is either a video track published by a participant whose identity starts with `obs-` (OBS through
+   LiveKit Ingress/WHIP; cameras of other participants are ignored) or a video track with source `SCREEN_SHARE`
+   (the browser's share button). Audio and camera tracks never trigger a message.
+4. On `track_published` of a share the bot posts `<name> is sharing their screen: <MEET_URL>/rooms/<room>` and saves
+   `room + participant identity -> message id` in `state.json`. A second start for the same participant is ignored.
+   A trailing ` (OBS)` in the participant name is shown as "(OBS)" in the sentence.
+5. On `track_unpublished` of that share, `participant_left` of that participant, or `room_finished`, it deletes the
+   message. If the message was already deleted by someone, that is fine. If Discord fails, the bot answers `500` so
+   LiveKit retries.
 
-The message disables mentions (`allowed_mentions: {parse: []}`), so a room name like `@everyone` cannot ping anyone.
+The message disables mentions (`allowed_mentions: {parse: []}`), so a participant name like `@everyone` cannot ping anyone.
 
 ## Requirements
 
@@ -84,10 +91,7 @@ sudo systemctl enable --now livekit-discord-bot
 journalctl -u livekit-discord-bot -f
 ```
 
-Open a room in Meet: the message should appear. Leave and wait for the room to close: it is deleted.
-
-> LiveKit closes a room after it has been empty for its `empty_timeout` (5 minutes by default), so the
-> message disappears a few minutes after the last person leaves.
+Share a screen in Meet (or start OBS): the message should appear. Stop sharing: it is deleted.
 
 ## Tests
 
@@ -98,14 +102,16 @@ and no real token:
 python3 test_bot.py
 ```
 
-It checks posting, duplicate starts, deleting, no-op for unknown rooms, and that wrong-secret, wrong-key and
-expired signatures are rejected.
+It checks OBS and browser shares, that audio/camera tracks and duplicates are ignored, deleting on stop, leave and
+room finish, and that wrong-secret, wrong-key and expired signatures are rejected.
 
 ## Notes and limits
 
 - The room link works only for people who can reach your Meet page (for example only over a VPN such as ZeroTier).
 - State lives in one JSON file. If you delete it while rooms are open, those messages will not be removed
   automatically.
-- LiveKit does not guarantee webhook delivery (it retries a few times). A missed `room_finished` leaves the
-  message in the channel; delete it by hand and remove the room from `state.json`.
+- LiveKit does not guarantee webhook delivery (it retries a few times). A missed stop event leaves the
+  message in the channel; delete it by hand and remove its entry from `state.json`.
 - One channel, one bot, no slash commands: it only reacts to LiveKit events.
+- OBS participants are recognised by the `obs-` identity prefix, which is how the ingress is created in this setup.
+  If you name OBS participants differently, change `via_obs` in `bot.py`.

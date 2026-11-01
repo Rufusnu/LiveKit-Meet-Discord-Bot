@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""LiveKit webhook receiver: post a Discord message when a room starts, delete it when the room finishes.
+"""LiveKit webhook receiver: post a Discord message with the room link when somebody starts sharing their screen
+(OBS or the browser share button), delete that message when they stop (or leave, or the room finishes).
 
 Listens on 127.0.0.1:8099 (LiveKit runs on the same host network and posts here).
 Config from /opt/livekit-bot/.env: DISCORD_TOKEN, DISCORD_CHANNEL_ID (this bot),
 LIVEKIT_API_KEY, LIVEKIT_API_SECRET (to verify the webhook signature), MEET_URL.
-State (room name -> message id) in /opt/livekit-bot/state.json.
+State (room + participant identity -> message id) in /opt/livekit-bot/state.json.
 """
 import base64, hashlib, hmac, json, os, sys, threading, time, urllib.error, urllib.parse, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -78,36 +79,70 @@ def save(state):
     os.replace(tmp, STATE)
 
 
-def room_started(name):
+def key(room, identity):
+    return f"{room}\t{identity}"
+
+
+def delete_message(mid):
+    try:
+        discord("DELETE", f"/channels/{CHANNEL}/messages/{mid}")
+        return True
+    except urllib.error.HTTPError as e:
+        if e.code == 404:  # already deleted by someone
+            return True
+        raise
+
+
+def share_started(room, identity, display, via_obs):
     with LOCK:
         state = load()
-        if name in state:
+        k = key(room, identity)
+        if k in state:
             return
-        link = f"{MEET_URL}/rooms/{urllib.parse.quote(name, safe='')}"
+        link = f"{MEET_URL}/rooms/{urllib.parse.quote(room, safe='')}"
+        how = " (OBS)" if via_obs else ""
         msg = discord("POST", f"/channels/{CHANNEL}/messages", {
-            "content": f"\U0001F3A5 Room **{name}** is open: {link}\n(needs ZeroTier; the message disappears when the room closes)",
+            "content": f"\U0001F3A5 **{display}** is sharing their screen{how}: {link}\n(needs ZeroTier; this message disappears when they stop)",
             "allowed_mentions": {"parse": []},
         })
-        state[name] = msg["id"]
+        state[k] = msg["id"]
         save(state)
-        log(f"posted message {msg['id']} for room {name}")
+        log(f"posted message {msg['id']} for {identity} in {room}")
 
 
-def room_finished(name):
+def share_stopped(room, identity=None):
+    """Delete the message of one sharer, or of everybody in the room when identity is None."""
     with LOCK:
         state = load()
-        mid = state.pop(name, None)
-        if mid is None:
-            return
-        try:
-            discord("DELETE", f"/channels/{CHANNEL}/messages/{mid}")
-            log(f"deleted message {mid} for room {name}")
-        except urllib.error.HTTPError as e:
-            if e.code != 404:  # 404 = already deleted by someone
-                state[name] = mid
-                save(state)
-                raise
-        save(state)
+        keys = [k for k in state if k.startswith(room + "\t") and (identity is None or k == key(room, identity))]
+        for k in keys:
+            delete_message(state[k])  # raises on failure: state stays, LiveKit retries
+            log(f"deleted message {state.pop(k)} for {k.split(chr(9), 1)[1]} in {room}")
+            save(state)
+
+
+def handle(ev):
+    """Screen shares: OBS (participant identity 'obs-<name>', video track) or a browser screen-share track."""
+    event = ev.get("event")
+    room = (ev.get("room") or {}).get("name", "")
+    p = ev.get("participant") or {}
+    ident = p.get("identity", "")
+    track = ev.get("track") or {}
+    if not room:
+        return
+    if event == "room_finished":
+        return share_stopped(room)
+    if not ident:
+        return
+    via_obs = ident.startswith("obs-")
+    is_share_track = track.get("type") in ("VIDEO", 1) and (via_obs or track.get("source") in ("SCREEN_SHARE", 3))
+    if event == "track_published" and is_share_track:
+        display = (p.get("name") or ident).removesuffix(" (OBS)")
+        share_started(room, ident, display, via_obs)
+    elif event == "track_unpublished" and is_share_track:
+        share_stopped(room, ident)
+    elif event == "participant_left":
+        share_stopped(room, ident)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -120,11 +155,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             ev = json.loads(body)
-            name = ev.get("room", {}).get("name", "")
-            if ev.get("event") == "room_started" and name:
-                room_started(name)
-            elif ev.get("event") == "room_finished" and name:
-                room_finished(name)
+            handle(ev)
             self.send_response(200)
         except Exception as e:  # LiveKit retries on non-2xx
             log(f"error handling {body[:80]!r}: {e!r}")

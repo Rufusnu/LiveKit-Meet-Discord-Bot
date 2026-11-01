@@ -115,3 +115,7 @@ room finish, and that wrong-secret, wrong-key and expired signatures are rejecte
 - One channel, one bot, no slash commands: it only reacts to LiveKit events.
 - OBS participants are recognised by the `obs-` identity prefix, which is how the ingress is created in this setup.
   If you name OBS participants differently, change `via_obs` in `bot.py`.
+
+## License
+
+GPL-3.0, see [LICENSE](LICENSE).

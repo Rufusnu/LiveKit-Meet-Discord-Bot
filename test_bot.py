@@ -99,6 +99,9 @@ res["room finished deletes the remaining message (Ana's, m3)"] = calls[-1][:2] =
 res["state empty at the end"] = json.load(open(d + "/state.json")) == {}
 send("room_started", room="main")
 res["room_started alone posts nothing"] = len(calls) == 6
+n0 = len(calls)
+send("track_published", "obs-test-e2e", "test-e2e (OBS)", VIDEO_CAMERA)
+res["streams named test* are never announced"] = len(calls) == n0
 reject_embeds = True
 n = len(calls)
 send("track_published", "Zed__0001", "Zed", VIDEO_SCREEN)

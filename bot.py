@@ -172,7 +172,7 @@ def handle(ev):
         return
     if event == "room_finished":
         return share_stopped(room)
-    if not ident:
+    if not ident or ident.startswith("obs-test"):  # test streams (name starting with "test") are never announced
         return
     via_obs = ident.startswith("obs-")
     is_share_track = track.get("type") in ("VIDEO", 1) and (via_obs or track.get("source") in ("SCREEN_SHARE", 3))

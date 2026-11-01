@@ -125,6 +125,7 @@ room finish, and that wrong-secret, wrong-key and expired signatures are rejecte
 - LiveKit does not guarantee webhook delivery (it retries a few times). A missed stop event leaves the
   message in the channel; delete it by hand and remove its entry from `state.json`.
 - One channel, one bot, no slash commands: it only reacts to LiveKit events.
+- Participants whose identity starts with `obs-test` are never announced (handy for automated tests).
 - OBS participants are recognised by the `obs-` identity prefix, which is how the ingress is created in this setup.
   If you name OBS participants differently, change `via_obs` in `bot.py`.
 
